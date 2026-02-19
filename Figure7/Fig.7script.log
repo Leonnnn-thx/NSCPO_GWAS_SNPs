@@ -1,0 +1,18 @@
+# 1. Footprint analysis by Tobias software
+/1.Tobias_footprint_batch.sh --config configure.txt
+# 2. footprint score (70% percentile)
+python /Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/24.TFbindingSNP/script/2.Tobias_filter_footprint_region.py -i HEPM_ATAC_merged_footprint.bw -o ./1.P70_TF_region/HEPM_3381_CPAEs --keep_intermediate --percentile 70
+# 3. Figure 7A
+python Fig7.A.py -i HEPM_3381_CPAEs_step1_raw.bed -o Fig.8A_CP_enhancers -p 70 --extract-bottom --merge
+# 4. Figure 7B
+bash Bindetect_dif.sh -1 /home/thx/NSCPO_Variant/HEPM_ATAC/2.Process_data/footprint/HEPM_3381_CPAEs_step4_merged.bed -2 /home/thx/NSCPO_Variant/HEPM_ATAC/2.Process_data/footprint/Fig.8A_CP_enhancers_bottom70_merged.bed -f /home/thx/NSCPO_Variant/HEPM_ATAC/2.Process_data/footprint/HEPM_ATAC_merged_footprint.bw -m /home/thx/NSCPO_Variant/Hierarchy_Enh_net/HEPM_expressed_TFs.jaspar -g /home/thx/reference_genome/hg19/hg19.fa -o CPaes -p CPenh3381 -n1 Top30 -n2 Bot70 -c 18
+
+Fig.7B.R
+
+# 5. Figure 7C
+python 4.Tobias_TFbSNP_footprintscores.py --bed HEPM_3381_CPAEs_step3_filtered.bed --vcf /Users/thx/Desktop/PH.D_candidate/1_Project/F_CLO/CLO课题/1.NSCLO_SNP数据处理/0_dbSNP151_VCF/dbsnp151.vcf --out-prefix /Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/24.TFbindingSNP/Results/HEPM/2.TOBIAS_results/3.TFbSNP/TFbSNP_CPae_footprint
+
+# 6. Figure 7D/7E
+Fig.7C.D.E.R
+
+
