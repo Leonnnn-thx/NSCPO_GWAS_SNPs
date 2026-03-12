@@ -1,0 +1,515 @@
+---
+title: "SNP_gkmSVM"
+author: "thx"
+date: "2025-08-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+setwd("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/19_microC_data/Results/SNP_candidateGenes")
+getwd()
+SNP_AE_Loop <- read.csv("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/19_microC_data/Results/2.SNP_candidateGenes/142SNP_79Enh_20Genes_251loops.csv", header = T, sep = " ")
+head(SNP_AE_Loop)
+NSCLP_sig_SNP <- read.delim("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/1.initial_data/1_GWAS_SNPdata/reference_GWAS/最终文件/Bed/UCSC/NSCPO_SNP_Total_1E_06.bed", header = F)
+head(NSCLP_sig_SNP)
+
+```
+```{r}
+library(biomaRt)
+library(dplyr)
+snp_ids <- NSCLP_sig_SNP$V4
+
+ensembl_hg19 <- useMart(biomart = "ENSEMBL_MART_SNP", 
+                        host = "https://grch37.ensembl.org", 
+                        path = "/biomart/martservice", 
+                        dataset = "hsapiens_snp")
+snp_info <- getBM(attributes = c('refsnp_id', 'allele', 'minor_allele'), 
+                  filters = 'snp_filter', 
+                  values = snp_ids, 
+                  mart = ensembl_hg19)
+
+head(snp_info)
+snp_info_processed <- snp_info %>%
+  mutate(
+    allele_parts = strsplit(allele, "/"),
+    major_allele = sapply(allele_parts, `[`, 1),
+    alt_allele = sapply(allele_parts, `[`, 2)
+  ) %>%
+  dplyr::select(V4 = refsnp_id, major_allele, alt_allele, minor_allele)
+
+head(snp_info_processed)
+
+NSCLP_sig_SNP_final <- NSCLP_sig_SNP %>%
+  left_join(snp_info_processed, by = "V4")
+
+head(NSCLP_sig_SNP_final)
+write.csv(NSCLP_sig_SNP_final, "NSCPO_SigSNP_Pvalue_ancestry.csv")
+```
+
+
+```{r}
+library(dplyr)
+snp_info_to_join <- NSCLP_sig_SNP_final %>% dplyr::select(snp_id = V4, P_value = V5, ancestry = V6, major_allele, alt_allele, minor_allele)
+
+SNP_AE_Loop_Pvalue <- SNP_AE_Loop %>%
+  left_join(snp_info_to_join, by = "snp_id", relationship = "many-to-many")
+```
+
+```{r}
+snp_ids <- SNP_AE_Loop_Pvalue$snp_id
+snp_info2 <- getBM(attributes = c('refsnp_id', 'allele', 'minor_allele'), 
+                  filters = 'snp_filter', 
+                  values = snp_ids, 
+                  mart = ensembl_hg19)
+snp_info_processed2 <- snp_info2 %>%
+  mutate(
+    allele_parts = strsplit(allele, "/"),
+    major_allele = sapply(allele_parts, `[`, 1),
+    alt_allele = sapply(allele_parts, `[`, 2)
+  ) %>%
+  dplyr::select(snp_id = refsnp_id, major_allele, alt_allele, minor_allele)
+NSCLP_sig_SNP_final <- SNP_AE_Loop_Pvalue %>%
+  left_join(snp_info_processed2, by = "snp_id")
+```
+
+```{r}
+library(dplyr)
+NSCLP_sig_SNP_final <- read.csv("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/19_microC_data/Results/SNP_candidateGenes/142SNP_79Enh_20Genes_251loops.csv", header = T)
+SNP_gkmSVM <- NSCLP_sig_SNP_final %>% dplyr::select(snp_chr, snp_start, snp_end, snp_id, major_allele.y, alt_allele.y) %>%
+  arrange(snp_chr, snp_start) %>%
+  distinct()
+SNP_gkmSVM_cleaned <- SNP_gkmSVM %>%
+  filter(
+    ! (is.na(major_allele.y) & is.na(alt_allele.y)), 
+    snp_id != "."                                    
+  )
+write.csv(SNP_gkmSVM_cleaned, "NSCLP_SNP_input_gkmSVM.csv")
+```
+
+
+```{r}
+library(dplyr)
+library(BSgenome.Hsapiens.UCSC.hg19)
+
+genome <- BSgenome.Hsapiens.UCSC.hg19
+
+# --- Get fa file for reference and alternative alleles at NSCPO related SNPs   ---
+flank_size <- 9 
+
+ref_fasta_file <- "reference_alleles.fa"
+alt_fasta_file <- "alt_alleles.fa"
+
+if (file.exists(ref_fasta_file)) file.remove(ref_fasta_file)
+if (file.exists(alt_fasta_file)) file.remove(alt_fasta_file)
+
+nrow(SNP_gkmSVM_cleaned)
+for (i in 1:nrow(SNP_gkmSVM_cleaned)) {
+  snp_info <- SNP_gkmSVM_cleaned[i, ]
+  chrom <- snp_info$snp_chr
+  snp_pos <- snp_info$snp_start
+  ref_allele <- snp_info$major_allele.y
+  alt_allele <- snp_info$alt_allele.y
+  snp_id <- snp_info$snp_id
+  print(paste("Number.", i, "个SNP:", snp_id))
+  start_pos <- snp_pos - flank_size
+  end_pos <- snp_pos + flank_size
+  reference_sequence <- tryCatch({
+    getSeq(genome, chrom, start_pos, end_pos)
+  }, error = function(e) {
+    print(paste("Wrong.", snp_id, "Skipped。"))
+    return(NULL)
+  })
+
+  if (is.null(reference_sequence)) {
+    next 
+  }
+  reference_sequence_char <- as.character(reference_sequence)
+
+  center_base_pos <- flank_size + 2
+  center_base <- substr(reference_sequence_char, center_base_pos, center_base_pos)
+  if (center_base != ref_allele) {
+    substr(reference_sequence_char, center_base_pos, center_base_pos) <- ref_allele
+  }
+  
+  # create alternative allele for NSCPO related SNPs
+  alt_sequence_char <- reference_sequence_char
+  substr(alt_sequence_char, center_base_pos, center_base_pos) <- alt_allele
+  fasta_header <- paste0(">", snp_id)
+  ref_fasta_content <- paste(fasta_header, reference_sequence_char, sep = "\n")
+  alt_fasta_content <- paste(fasta_header, alt_sequence_char, sep = "\n")
+  cat(ref_fasta_content, file = ref_fasta_file, append = TRUE, sep = "\n")
+  cat(alt_fasta_content, file = alt_fasta_file, append = TRUE, sep = "\n")
+}
+
+print("---")
+print("All Done ！")
+print(paste("All reference allele of NSCPO related SNPs :", ref_fasta_file))
+print(paste("All alternative allele of NSCPO related SNPs :", alt_fasta_file))
+
+```
+```{r}
+set.seed(123)
+library(gkmSVM)
+
+## input file
+testfn_ref= '/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/13_gkmSVM/NSCPO_SNP_score_250801/reference_alleles.fa'    #test set (reference allele) (FASTA format)
+testfn_alt= '/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/13_gkmSVM/NSCPO_SNP_score_250801/alt_alleles.fa'    #test set (reference allele) (FASTA format)
+
+svmfnprfx = 'HEPM_AEs'
+## output file 
+outfn_snp = "/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/13_gkmSVM/NSCPO_SNP_score_250801/NSCPO_SNP_score.out"
+## deltaSVM get score for SNPs
+gkmsvm_delta(testfn_ref,testfn_alt, svmfnprfx, outfn_snp)
+
+```
+
+
+```{r}
+score <- read.csv("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/13_gkmSVM/NSCPO_SNP_score_250801/NSCPO_SNP_score.out", header = F, sep = " ")
+colnames(score) <- c("snp_id", "score")
+
+head(NSCLP_sig_SNP_final)
+SNP_score_total <- NSCLP_sig_SNP_final %>% left_join(score, by = "snp_id")
+Fig_input <- SNP_score_total %>% dplyr::select(snp_chr, snp_start, snp_end, snp_id, P_value, score)
+SNP_data <- SNP_score_total %>% dplyr::select(snp_chr, snp_start, snp_end, snp_id, P_value, score)
+SNP_data <- SNP_data %>% distinct() %>% arrange(score)
+write.csv(SNP_score_total, "SNP_Score_Loops.csv")
+```
+
+# Figure 3h 
+```{r} 
+library(dplyr)
+library(ggplot2)
+library(forcats) 
+library(ggrepel)
+
+# --- input data ---
+plot_data <- Fig_input %>%
+  distinct() %>%
+  arrange(score) %>%
+  mutate(
+    category = case_when(
+      is.na(P_value) ~ "LDSNP",            
+      P_value < 5e-08 ~ "significant",    
+      TRUE ~ "sub-significant"            
+    ),
+    snp_id = fct_inorder(snp_id)
+  )
+
+P <- ggplot(plot_data, aes(x = snp_id, y = score, color = category)) +
+
+  geom_point(alpha = 0.8, size = 2.5, shape = 16) +
+  scale_color_manual(
+    name = "SNP Category", 
+    values = c(
+      "significant" = "#E7211A",     
+      "sub-significant" = "#18499E", 
+      "LDSNP" = "grey"             
+    ), guide = "none"
+  ) +
+  labs(
+    y = "deltaSVM Scores"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_blank(), 
+    axis.ticks.x = element_blank(), 
+    panel.grid.major.x = element_blank(), 
+    panel.grid.minor.y = element_blank(), 
+    legend.position = "top"
+  )
+
+snps_to_label <- c("rs592164", "rs56268268", "rs556248561")
+label_data <- plot_data %>%
+  filter(snp_id %in% snps_to_label)
+Z <- P + 
+  geom_text_repel(
+    data = label_data, 
+    aes(label = snp_id), 
+    size = 3.5, 
+    color = "black", 
+    box.padding = 4, 
+    point.padding = 0.3, 
+    min.segment.length = 0,
+    segment.color = 'grey50',
+    max.overlaps = Inf 
+  )
+Z
+
+score_quantiles <- quantile(plot_data$score, probs = c(0.25, 0.75), na.rm = TRUE)
+q25 <- score_quantiles[1] # 25% percent
+q75 <- score_quantiles[2] # 75% percent
+
+Final_Plot <- Z +
+  geom_hline(
+    aes(yintercept = q75),
+    color = "grey20",
+    linetype = "dashed", 
+    size = 0.4
+  ) +
+  geom_hline(
+    aes(yintercept = q25),
+    color = "grey20",
+    linetype = "dashed",
+    size = 0.4
+  ) +
+  annotate(
+    "text",
+    x = 15, 
+    y = q75, 
+    label = paste("75th Percentile:", round(q75, 3)), 
+    vjust = -0.5,
+    hjust = 0,    
+    color = "black",
+    size = 3.5
+  ) +
+  annotate(
+    "text",
+    x = 15,
+    y = q25,
+    label = paste("25th Percentile:", round(q25, 3)),
+    vjust = -0.5,
+    hjust = 0,
+    color = "black",
+    size = 3.5
+  )
+
+Final_Plot
+ggsave("Fig.3h.delta_score_SNP.pdf", plot = Final_Plot, width = 6.5, height = 3, dpi = 300)
+```
+
+
+# Figure 3i
+```{r}
+library(dplyr)
+top_bottom_12 <- Fig_input %>%
+  distinct() %>% 
+  {bind_rows(
+    slice_max(., score, n = 7),
+    slice_min(., score, n = 8)
+  )}
+print(top_bottom_12)
+
+# --- Nearbest genes ---
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(org.Hs.eg.db)
+library(GenomicRanges)
+library(dplyr)
+snp_gr <- GRanges(
+  seqnames = top_bottom_12$snp_chr,
+  ranges = IRanges(start = top_bottom_12$snp_start, 
+                   end = top_bottom_12$snp_end)
+)
+mcols(snp_gr) <- top_bottom_12[, c("snp_id", "P_value", "score")]
+
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+peak_anno <- annotatePeak(snp_gr, 
+                          TxDb = txdb,
+                          annoDb = "org.Hs.eg.db",
+                          verbose = FALSE)
+
+result <- as.data.frame(peak_anno) %>%
+  dplyr::select(all_of(c("seqnames", "start", "end", "snp_id", "P_value", "score", "SYMBOL")))
+
+print(result)
+result_V1 <- result %>% 
+  dplyr::rename(Nearst_Gene = SYMBOL)
+
+# -- Filter SNP-Loop-target gene ---
+SNP_EP <- NSCLP_sig_SNP_final %>%
+  dplyr::filter(snp_id %in% result_V1$snp_id) %>%
+  dplyr::select(snp_id, interaction_type, enhancer_id, target_genes) %>%
+  distinct()
+SNP_EP_merged <- SNP_EP %>%
+  filter(target_genes != "" & !is.na(target_genes)) %>%
+  group_by(snp_id) %>%
+  summarise(target_genes = paste(unique(target_genes), collapse = ", ")) %>%
+  ungroup()
+
+result_V2 <- result_V1 %>%
+  left_join(SNP_EP_merged, by = "snp_id")
+
+print(result_V2)
+colnames(result_V2)
+# -------- Filter eQTL - Gene ---------
+eQTL <- read.csv("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/19_microC_data/Results/eQTL_Gene/142SNP_54eQTL_12Gene_115pairs_GTEx.v10.csv", header = T, sep = ",")
+
+eQTL_matched <- eQTL %>%
+  dplyr::filter(refsnp_id %in% result_V2$snp_id) %>%
+  dplyr::select(refsnp_id, external_gene_name.x) %>%
+  dplyr::filter(!is.na(external_gene_name.x) & external_gene_name.x != "") %>%
+  distinct()
+
+eQTL_merged <- eQTL_matched %>%
+  group_by(refsnp_id) %>%
+  summarise(eQTL_genes = paste(unique(external_gene_name.x), collapse = ", ")) %>%
+  ungroup()
+
+Top_ranked_SNP_result <- result_V2 %>%
+  left_join(eQTL_merged, by = c("snp_id" = "refsnp_id"))
+
+write.csv(result, "snps_nearest_genes_hg19.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+library(stringr)
+# ===== Data =====
+Top_ranked_SNP_result <- Top_ranked_SNP_result[-15, ]
+SNP_Genes <- read.csv("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/19_microC_data/Results/2.SNP_candidateGenes/218SNP_123Enh_27Genes.csv")
+Top_ranked_SNP_result_V2 <- Top_ranked_SNP_result %>%
+  left_join(
+    SNP_Genes %>% dplyr::select(SNP_id, Tier1_Gene, Tier2_Gene),
+    by = c("snp_id" = "SNP_id")
+  )
+
+plot_data <- Top_ranked_SNP_result_V2 %>%
+  arrange(desc(score)) %>%
+  head(30) %>%
+  mutate(
+    rank = row_number(),
+    snp_type = case_when(
+      !is.na(P_value) & P_value < 5e-08 ~ "Significant SNP",
+      !is.na(P_value) & P_value >= 5e-08 & P_value <= 1e-06 ~ "Sub-Significant SNP",
+      is.na(P_value) ~ "LD SNP",
+      TRUE ~ "LD SNP"
+    ),
+    snp_color = case_when(
+      snp_type == "Significant SNP" ~ "#E63946",
+      snp_type == "Sub-Significant SNP" ~ "#457B9D",
+      snp_type == "LD SNP" ~ "#000000"
+    ),
+    color_group = ifelse(score >= 0, "Positive", "Negative")
+  )
+
+plot_data <- plot_data %>%
+  mutate(
+    combined_loop_genes = case_when(
+      !is.na(Tier1_Gene) & !is.na(Tier2_Gene) ~ 
+        paste(Tier1_Gene, Tier2_Gene, sep = "\n"),
+      !is.na(Tier1_Gene) ~ Tier1_Gene,
+      !is.na(Tier2_Gene) ~ Tier2_Gene,
+      TRUE ~ ""
+    )
+  )
+
+# ===== Figure 3i=====
+
+# SNP list
+p_snp <- ggplot(plot_data, aes(x = 1, y = rank)) +
+  geom_text(aes(label = snp_id, color = snp_type), 
+            hjust = 1, size = 3, family = "mono") +
+  scale_color_manual(
+    values = c("Significant SNP" = "#E63946", 
+               "Sub-Significant SNP" = "#457B9D", 
+               "LD SNP" = "#000000"),
+    name = "SNP Type"
+  ) +
+  scale_y_reverse(expand = c(0.02, 0.02)) +
+  scale_x_continuous(limits = c(0, 1.5)) +
+  theme_void() +
+  theme(
+    plot.margin = margin(25, 5, 5, 5),
+    legend.position = "none"
+  )
+
+# 2. Score plot
+p_score <- ggplot(plot_data, aes(x = score, y = rank)) +
+  geom_rect(aes(xmin = -40, xmax = 35,
+                ymin = rank - 0.45, ymax = rank + 0.45),
+            fill = NA, color = "grey50", linewidth = 0.5) +
+  geom_point(aes(fill = color_group), size = 4, shape = 21, color = "black", stroke = 0.5) +
+  scale_fill_manual(values = c("Positive" = "#ffccc4", "Negative" = "#25b1bf"),
+                    name = "Score") +
+  scale_y_reverse(expand = c(0.02, 0.02)) +
+  scale_x_continuous(limits = c(-40, 35), breaks = seq(-40, 35, by = 10)) +
+  labs(x = "deltaScore") +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_text(size = 10, face = "bold"),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "grey80", linewidth = 0.3),
+    legend.position = "none",
+    plot.margin = margin(25, 5, 5, 5)
+  )
+
+# 3. Nearest Gene
+p_nearest <- ggplot(plot_data, aes(x = 0.5, y = rank)) +
+  geom_tile(width = 0.95, height = 0.95, fill = "white", color = "grey50", linewidth = 0.3) +
+  geom_text(aes(label = Nearst_Gene), size = 2.8, fontface = "italic") +
+  scale_y_reverse(expand = c(0.02, 0.02)) +
+  scale_x_continuous(limits = c(0, 1)) +
+  labs(title = "Nearest\ngene") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 9, face = "bold"),
+    plot.margin = margin(25, 5, 5, 5)
+  )
+
+# 4a. Tier1 Gene
+p_tier1 <- ggplot(plot_data, aes(x = 0.5, y = rank)) +
+  geom_tile(width = 0.95, height = 0.95, fill = "white", color = "grey50", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(is.na(Tier1_Gene), "", Tier1_Gene)), 
+            size = 2.5, fontface = "italic", lineheight = 0.8) +
+  scale_y_reverse(expand = c(0.02, 0.02)) +
+  scale_x_continuous(limits = c(0, 1)) +
+  labs(title = "Tier1\ngene") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 9, face = "bold"),
+    plot.margin = margin(25, 5, 5, 5)
+  )
+
+# 4b. Tier2 Gene
+p_tier2 <- ggplot(plot_data, aes(x = 0.5, y = rank)) +
+  geom_tile(width = 0.95, height = 0.95, fill = "white", color = "grey50", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(is.na(Tier2_Gene), "", Tier2_Gene)), 
+            size = 2.5, fontface = "italic", lineheight = 0.8) +
+  scale_y_reverse(expand = c(0.02, 0.02)) +
+  scale_x_continuous(limits = c(0, 1)) +
+  labs(title = "Tier2\ngene") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 9, face = "bold"),
+    plot.margin = margin(25, 5, 5, 5)
+  )
+
+# 5. eQTL Gene
+p_eqtl <- ggplot(plot_data, aes(x = 0.5, y = rank)) +
+  geom_tile(width = 0.95, height = 0.95, fill = "white", color = "grey50", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(is.na(eQTL_genes), "", eQTL_genes)), 
+            size = 2.5, fontface = "italic", lineheight = 0.8) +
+  scale_y_reverse(expand = c(0.02, 0.02)) +
+  scale_x_continuous(limits = c(0, 1)) +
+  labs(title = "eQTL\ngene") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 9, face = "bold"),
+    plot.margin = margin(25, 5, 5, 5)
+  )
+
+final_plot <- p_snp + p_score + p_nearest + p_tier1 + p_tier2 + p_eqtl +
+  plot_layout(widths = c(1.2, 1.5, 1.5, 1.5, 1.5, 2.5))
+
+ggsave("Figure3i.final_snp_plot_separate_tiers.pdf", final_plot, width = 16, height = 10)
+
+save.image("gkmSVM_scores_Fig3i.RData")
+setwd("/Users/thx/Desktop/PH.D_candidate/1_Project/B_NSCPO_FunctionalVariants_CRE/2_analysis_process/13_gkmSVM/NSCPO_SNP_score_250801")
+load("gkmSVM_scores_Fig3i.RData")
+```
